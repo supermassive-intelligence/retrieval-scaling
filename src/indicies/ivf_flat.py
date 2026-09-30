@@ -58,7 +58,11 @@ class IVFFlatIndexer(object):
         self.trained_index_path = trained_index_path  # path to save the trained index
         self.passage_dir = passage_dir
         self.pos_map_save_path = pos_map_save_path
-        self.cuda = torch.cuda.is_available()
+        # torch having CUDA says nothing about whether *faiss* was built with GPU
+        # support; faiss-cpu has no StandardGpuResources. No faiss-gpu wheel exists
+        # for aarch64, so this falls to the CPU branch below, which trains in fp32
+        # rather than the GPU path's fp16.
+        self.cuda = torch.cuda.is_available() and hasattr(faiss, "StandardGpuResources")
 
         self.sample_size = sample_train_size
         self.dimension = dimension

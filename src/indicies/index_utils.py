@@ -4,6 +4,25 @@ import json
 from tqdm import tqdm
 import re
 import glob
+import gc
+import ctypes
+from array import array
+
+import numpy as np
+
+
+class _FilePositions:
+    """``[doc_id] -> [file_path, position]``, the shape the dict it replaces returned."""
+
+    def __init__(self, file_path, positions):
+        self.file_path = file_path
+        self.positions = positions
+
+    def __getitem__(self, doc_id):
+        return [self.file_path, int(self.positions[doc_id])]
+
+    def __len__(self):
+        return len(self.positions)
 
 
 def get_index_dir_and_embedding_paths(cfg, index_shard_ids=None):
@@ -60,11 +79,24 @@ def convert_pkl_to_jsonl(passage_dir):
         with open(file_path, 'rb') as f:
             data = pickle.load(f)
         
-        # Save the data to the JSONL file
-        with open(jsonl_file, 'w') as f:
+        # Save the data to the JSONL file. Local patch (muisti, MAS-396): write to a
+        # temporary name and rename when complete, so a process killed mid-write (the
+        # MemoryMax cap) cannot leave a partial file that the exists() check above
+        # would then trust.
+        tmp_file = jsonl_file + '.partial'
+        with open(tmp_file, 'w') as f:
             for item in data:
                 json.dump(item, f)
                 f.write('\n')
+        os.replace(tmp_file, jsonl_file)
+        del data
+    # A 10 GB pickle is ~30 GB of Python objects; glibc keeps the freed heap unless told
+    # to return it, and the index for the same shard is already resident.
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except OSError:
+        pass
     print("All pickle files have been converted to JSONL files.")
 
 
@@ -76,7 +108,7 @@ def get_passage_pos_ids(passage_dir, pos_map_save_path):
 
     if os.path.isdir(passage_dir):
         filenames = os.listdir(passage_dir)
-        jsonl_files = [filename for filename in filenames if '.jsonl' in filename and 'pos_id_map' not in filename]
+        jsonl_files = [filename for filename in filenames if filename.endswith('.jsonl') and 'pos_id_map' not in filename]  # not .jsonl.partial
         print(f"Converting passages to JSONL data format: {passage_dir}")
         
         pos_id_map = {}
@@ -86,17 +118,18 @@ def get_passage_pos_ids(passage_dir, pos_map_save_path):
             shard_id = int(match.group(1))
             file_path = os.path.join(passage_dir, filename)
             
-            file_pos_id_map = {}
+            # Local patch (muisti, MAS-396): same positions from the same tell() loop, stored
+            # as one int64 array per file instead of a [path, pos] list per passage. The
+            # dict form needed ~830 B/passage (~60 GB for rpj_c4_0.1); this needs 8 B.
+            positions = array('q')
             with open(file_path, 'r') as file:
                 position = file.tell()
                 line = file.readline()
-                doc_id = 0
                 while line:
-                    file_pos_id_map[doc_id] = [file_path, position]
-                    doc_id += 1
+                    positions.append(position)
                     position = file.tell()
                     line = file.readline()
-            pos_id_map[shard_id] = file_pos_id_map
+            pos_id_map[shard_id] = _FilePositions(file_path, np.frombuffer(positions, dtype=np.int64))
     
     elif os.path.isfile(passage_dir):
         # NOTE: deprecated feature, will be removed in future release.

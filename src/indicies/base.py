@@ -73,6 +73,7 @@ class Indexer(object):
         
         
     def search(self, query_embs, k=5):
-        all_scores, all_passages, db_ids = self.datastore.search(query_embs, k)
+        # Local patch (muisti, MAS-396): FlatIndexer.search returns 4 values since 76263c4.
+        all_scores, all_passages, db_ids = self.datastore.search(query_embs, k)[:3]
         return all_scores, all_passages, db_ids
     

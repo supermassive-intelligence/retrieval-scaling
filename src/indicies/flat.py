@@ -33,6 +33,11 @@ class FlatIndexer(object):
         self.pos_map_save_path = pos_map_save_path
         self.dimension=dimension
         self.cuda = False
+        # Local patch (muisti, MAS-396): the released per-shard metas are bare chunk ids,
+        # and _get_passage used to assume shard 0 for them, reading shard k's hits out of
+        # shard 0's file. A single-shard index lives in index_<type>/<k>/; take k from there.
+        _leaf = os.path.basename(os.path.dirname(index_path))
+        self.default_shard_id = int(_leaf) if _leaf.isdigit() else 0
 
         if os.path.exists(index_path) and os.path.exists(self.meta_file):
             print("Loading index...")
@@ -117,13 +122,19 @@ class FlatIndexer(object):
         with open(filename, 'r') as file:
             file.seek(position)
             line = file.readline()
-        return json.loads(line)
+        item = json.loads(line)
+        # Every released passage records its own position; a mismatch means the index
+        # and the passage file disagree, and the text would be some other passage.
+        if (item.get("shard_id", shard_id), item.get("id", chunk_id)) != (shard_id, chunk_id):
+            raise ValueError(f"passage lookup ({shard_id}, {chunk_id}) returned "
+                             f"({item.get('shard_id')}, {item.get('id')}) from {filename}")
+        return item
     
     def _get_passage(self, index_id):
         try:
             shard_id, chunk_id = self.index_id_to_db_id[index_id]
         except:
-            shard_id, chunk_id = 0, self.index_id_to_db_id[index_id]
+            shard_id, chunk_id = self.default_shard_id, self.index_id_to_db_id[index_id]
         return self._id2psg(shard_id, chunk_id)
     
     def get_retrieved_passages(self, all_indices, additional_metadata=[]):

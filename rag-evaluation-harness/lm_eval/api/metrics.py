@@ -167,7 +167,7 @@ def acc_mutual_info_fn(items):  # This is a passthrough function
 
 
 # exact_match = hf_evaluate.load("exact_match")
-exact_match = hf_evaluate.load("exact_match", experiment_id=random.randint(0, 1e5))  # avoid error: Error in finalize: another evaluation module instance is already using the local cache file.
+exact_match = hf_evaluate.load("exact_match", experiment_id=random.randint(0, int(1e5)))  # avoid error: Error in finalize: another evaluation module instance is already using the local cache file.
 
 
 @register_metric(
