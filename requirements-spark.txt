@@ -1,6 +1,7 @@
-# Environment the DGX Spark runs used (aarch64, CUDA 13, Python 3.12), frozen 2026-09-29.
+# Environment for the MassiveDS runs (Python 3.12, CUDA 13), frozen on the DGX Spark 2026-09-29.
 # Install: python3.12 -m venv .venv && .venv/bin/pip install -r requirements-spark.txt
 # torch's +cu130 aarch64 wheels come from the PyTorch index.
+# nvidia-* and triton are left to torch, which picks the right builds for aarch64 and x86.
 --extra-index-url https://download.pytorch.org/whl/cu130
 absl-py==2.5.0
 accelerate==1.15.0
@@ -54,21 +55,6 @@ networkx==3.6.1
 nltk==3.10.3
 numexpr==2.14.2
 numpy==2.5.3
-nvidia-cublas==13.1.1.3
-nvidia-cuda-cupti==13.0.85
-nvidia-cuda-nvrtc==13.0.88
-nvidia-cuda-runtime==13.0.96
-nvidia-cudnn-cu13==9.24.0.43
-nvidia-cufft==12.0.0.61
-nvidia-cufile==1.15.1.6
-nvidia-curand==10.4.0.35
-nvidia-cusolver==12.0.4.66
-nvidia-cusparse==12.6.3.3
-nvidia-cusparselt-cu13==0.8.1
-nvidia-nccl-cu13==2.30.7
-nvidia-nvjitlink==13.3.33
-nvidia-nvshmem-cu13==3.4.5
-nvidia-nvtx==13.0.85
 omegaconf==2.3.1
 packaging==26.3
 pandas==3.0.6
@@ -92,7 +78,7 @@ sacrebleu==2.6.0
 safetensors==0.8.0
 scikit-learn==1.9.1
 scipy==1.18.1
-sentence-transformers==6.1.0
+sentence-transformers==5.7.0
 setuptools==78.1.0
 shellingham==1.5.4
 six==1.17.0
@@ -107,7 +93,6 @@ torch==2.14.0+cu130
 tqdm==4.70.1
 tqdm-multiprocess==0.0.11
 transformers==4.57.6
-triton==3.8.0
 typepy==1.3.5
 typer==0.27.2
 typing_extensions==4.16.0
