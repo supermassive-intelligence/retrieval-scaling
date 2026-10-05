@@ -59,9 +59,16 @@ class FlatIndexer(object):
             match = re.search(r"passages_(\d+)\.pkl", filename)
             shard_id = int(match.group(1))
                 
-            to_add = self.get_embs(shard_id=shard_id).copy()
-            self.index.add(to_add)
-            ids_toadd = [[shard_id, chunk_id] for chunk_id in range(len(to_add))]  #TODO: check len(to_add) is correct usage
+            # Local patch (muisti, MAS-396): add the stored (fp16) rows in fp32 chunks. The
+            # original stacked, cast and copied the whole shard first, ~4x its size in RAM
+            # (a 33 GB rpj_c4 shard was OOM-killed at 120 GiB); the index gets the same vectors.
+            with open(embed_path, "rb") as fin:
+                _, embs = pickle.load(fin)
+            embs = np.asarray(embs)
+            for i in range(0, len(embs), 1_000_000):
+                self.index.add(np.ascontiguousarray(embs[i:i + 1_000_000], dtype=np.float32))
+            ids_toadd = [[shard_id, chunk_id] for chunk_id in range(len(embs))]
+            del embs
             self.index_id_to_db_id.extend(ids_toadd)
             print ('Added %d / %d shards, (%d min)' % (shard_id+1, len(self.embed_paths), (time.time()-start_time)/60))
         
