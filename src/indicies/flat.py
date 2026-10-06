@@ -4,6 +4,7 @@ import json
 import time
 import pickle
 import faiss
+import struct
 import numpy as np
 import torch
 
@@ -11,6 +12,13 @@ from src.indicies.index_utils import convert_pkl_to_jsonl, get_passage_pos_ids
 
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
+
+
+def _flat_ip_header(d, ntotal):
+    """faiss's on-disk header for an IndexFlatIP of ntotal rows, up to the float payload:
+    fourcc, d, ntotal, two reserved 1<<20 fields, is_trained, metric (0 = inner product),
+    then the code vector's length in floats."""
+    return b"IxFI" + struct.pack("<iqqq?iQ", d, ntotal, 1 << 20, 1 << 20, True, 0, ntotal * d)
 
 device = 'cuda' if torch.cuda.is_available()  else 'cpu'
 
@@ -53,35 +61,40 @@ class FlatIndexer(object):
             self.psg_pos_id_map = self.load_psg_pos_id_map()
 
     def _build_index(self,):
+        # Local patch (muisti, MAS-396): stream the fp32 rows of every shard straight into
+        # an IndexFlatIP file, then read it back. Holding the fp16 shard and a full fp32
+        # index at once (~3x the shard) OOM-killed 26-33 GB rpj_c4/commoncrawl shards at
+        # 110 GiB; this peaks at the fp32 index alone. The file is byte-identical to
+        # faiss.write_index of the same rows (checked by tests/test_flat_stream.py).
         start_time = time.time()
-        for embed_path in self.embed_paths:
-            filename = os.path.basename(embed_path)
-            match = re.search(r"passages_(\d+)\.pkl", filename)
-            shard_id = int(match.group(1))
-                
-            # Local patch (muisti, MAS-396): add the stored (fp16) rows in fp32 chunks. The
-            # original stacked, cast and copied the whole shard first, ~4x its size in RAM
-            # (a 33 GB rpj_c4 shard was OOM-killed at 120 GiB); the index gets the same vectors.
-            with open(embed_path, "rb") as fin:
-                _, embs = pickle.load(fin)
-            embs = np.asarray(embs)
-            for i in range(0, len(embs), 1_000_000):
-                self.index.add(np.ascontiguousarray(embs[i:i + 1_000_000], dtype=np.float32))
-            ids_toadd = [[shard_id, chunk_id] for chunk_id in range(len(embs))]
-            del embs
-            self.index_id_to_db_id.extend(ids_toadd)
-            print ('Added %d / %d shards, (%d min)' % (shard_id+1, len(self.embed_paths), (time.time()-start_time)/60))
-        
-        faiss.write_index(self.index, self.index_path)
+        ntotal = 0
+        with open(self.index_path + '.partial', 'wb') as out:
+            out.write(_flat_ip_header(self.dimension, 0))  # rewritten once ntotal is known
+            for embed_path in self.embed_paths:
+                filename = os.path.basename(embed_path)
+                match = re.search(r"passages_(\d+)\.pkl", filename)
+                shard_id = int(match.group(1))
+                with open(embed_path, "rb") as fin:
+                    _, embs = pickle.load(fin)
+                del _
+                embs = np.asarray(embs)
+                assert embs.ndim == 2 and embs.shape[1] == self.dimension, embs.shape
+                for i in range(0, len(embs), 1_000_000):
+                    out.write(np.ascontiguousarray(embs[i:i + 1_000_000], dtype=np.float32).tobytes())
+                self.index_id_to_db_id.extend([shard_id, chunk_id] for chunk_id in range(len(embs)))
+                ntotal += len(embs)
+                del embs
+                print ('Added %d / %d shards, (%d min)' % (shard_id+1, len(self.embed_paths), (time.time()-start_time)/60))
+            out.seek(0)
+            out.write(_flat_ip_header(self.dimension, ntotal))
+        os.replace(self.index_path + '.partial', self.index_path)
         with open(self.meta_file, 'wb') as fout:
             pickle.dump(self.index_id_to_db_id, fout)
         print ('Adding took {} s'.format(time.time() - start_time))
-        
+        self.index = faiss.read_index(self.index_path)
+        assert self.index.ntotal == ntotal == len(self.index_id_to_db_id)
         print(f'Total data indexed {len(self.index_id_to_db_id)}')
-        faiss.write_index(self.index, self.index_path)
-        with open(self.meta_file, mode='wb') as f:
-            pickle.dump(self.index_id_to_db_id, f)
-        
+
     def load_embeds(self, shard_id=None):
         all_ids, all_embeds = [], []
         offset = 0
