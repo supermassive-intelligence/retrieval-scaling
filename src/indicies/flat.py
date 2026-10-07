@@ -169,8 +169,35 @@ class FlatIndexer(object):
             metadata.append(additional_metadata_per_query)
         return passages, db_ids, metadata
     
+    def _gpu_search(self, query_embs, k, q_block=1024, x_block=2_000_000):
+        # Local patch (muisti, MAS-396): exact inner-product top-k on the GPU, in fp32 (no
+        # TF32), reading the vectors in place from the faiss index. The CPU flat search took
+        # ~2.5 h per 1.4T shard for TriviaQA; this is the same arithmetic, so scores agree to
+        # fp32 rounding and the top-k differs only where two scores tie to that precision.
+        xb = faiss.rev_swig_ptr(self.index.get_xb(), self.index.ntotal * self.index.d)
+        xb = xb.reshape(self.index.ntotal, self.index.d)
+        q = torch.from_numpy(np.ascontiguousarray(query_embs, dtype=np.float32)).cuda()
+        best_s = torch.full((len(q), k), -float("inf"), device="cuda")
+        best_i = torch.full((len(q), k), -1, dtype=torch.int64, device="cuda")
+        with torch.no_grad():
+            for j in range(0, len(xb), x_block):
+                x = torch.from_numpy(xb[j:j + x_block]).cuda()
+                for i in range(0, len(q), q_block):
+                    s, idx = torch.topk(q[i:i + q_block] @ x.T, min(k, len(x)), dim=1)
+                    cs = torch.cat([best_s[i:i + q_block], s], dim=1)
+                    ci = torch.cat([best_i[i:i + q_block], idx + j], dim=1)
+                    top = torch.topk(cs, k, dim=1)
+                    best_s[i:i + q_block] = top.values
+                    best_i[i:i + q_block] = torch.gather(ci, 1, top.indices)
+                del x
+        return best_s.cpu().numpy(), best_i.cpu().numpy()
+
     def search(self, query_embs, k=4096, additional_metadata=[]):
-        all_scores, all_indices = self.index.search(query_embs.astype(np.float32), k)
+        if torch.cuda.is_available() and os.environ.get("MUISTI_SEARCH_CPU") != "1":
+            torch.backends.cuda.matmul.allow_tf32 = False
+            all_scores, all_indices = self._gpu_search(query_embs, k)
+        else:
+            all_scores, all_indices = self.index.search(query_embs.astype(np.float32), k)
         if len(additional_metadata) > 0:
             all_passages, db_ids, metadata = self.get_retrieved_passages(all_indices, additional_metadata)
             return all_scores.tolist(), all_passages, db_ids, metadata
