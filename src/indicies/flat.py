@@ -137,9 +137,13 @@ class FlatIndexer(object):
             psg_pos_id_map = self.build_passage_pos_id_map()
         return psg_pos_id_map
     
-    def _id2psg(self, shard_id, chunk_id):
+    def _id2psg(self, shard_id, chunk_id, file=None):
         filename, position = self.psg_pos_id_map[shard_id][chunk_id]
-        with open(filename, 'r') as file:
+        if file is None:
+            with open(filename, 'r') as file:
+                file.seek(position)
+                line = file.readline()
+        else:
             file.seek(position)
             line = file.readline()
         item = json.loads(line)
@@ -150,17 +154,41 @@ class FlatIndexer(object):
                              f"({item.get('shard_id')}, {item.get('id')}) from {filename}")
         return item
     
-    def _get_passage(self, index_id):
+    def _db_id(self, index_id):
         try:
             shard_id, chunk_id = self.index_id_to_db_id[index_id]
         except:
             shard_id, chunk_id = self.default_shard_id, self.index_id_to_db_id[index_id]
-        return self._id2psg(shard_id, chunk_id)
-    
+        return shard_id, chunk_id
+
+    def _get_passage(self, index_id):
+        return self._id2psg(*self._db_id(index_id))
+
+    def _get_passages(self, index_ids):
+        # Local patch (muisti, MAS-396): read each distinct passage once, in file and offset
+        # order, with one open per passage file. Opening the file for every hit (1.8M opens
+        # on the NAS for TriviaQA's 17,944 x top 100) took ~1 h 50 min per 1.4T shard.
+        db_ids = {i: self._db_id(i) for i in set(index_ids)}
+        order = sorted(db_ids, key=lambda i: self.psg_pos_id_map[db_ids[i][0]][db_ids[i][1]])
+        items, file, current = {}, None, None
+        try:
+            for i in order:
+                filename = self.psg_pos_id_map[db_ids[i][0]][db_ids[i][1]][0]
+                if filename != current:
+                    if file is not None:
+                        file.close()
+                    file, current = open(filename, 'r'), filename
+                items[i] = self._id2psg(*db_ids[i], file=file)
+        finally:
+            if file is not None:
+                file.close()
+        return items
+
     def get_retrieved_passages(self, all_indices, additional_metadata=[]):
         passages, db_ids, metadata = [], [], []
+        items = self._get_passages([int(i) for query_indices in all_indices for i in query_indices])
         for query_indices in all_indices:
-            retrieved_data_per_query = [self._get_passage(int(index_id)) for index_id in query_indices]
+            retrieved_data_per_query = [items[int(index_id)] for index_id in query_indices]
             passages_per_query = [item["text"] for item in retrieved_data_per_query]
             additional_metadata_per_query = {metadata_key: [item.get(metadata_key, None) for item in retrieved_data_per_query] for metadata_key in additional_metadata}
             db_ids_per_query = [self.index_id_to_db_id[int(index_id)] for index_id in query_indices]
