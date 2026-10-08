@@ -453,7 +453,9 @@ def post_hoc_merge_topk_multi_domain(cfg):
 
                         # Rerank based on score and only keep the top n_docs to avoid memory explosion
                         if merged_data[id_]['ctxs'] and merged_data[id_]['ctxs'][0] is not None:
-                            merged_data[id_]['ctxs'] = sorted(merged_data[id_]['ctxs'], key=lambda x: x['retrieval score'], reverse=True)
+                            # Local patch (muisti, MAS-396): sort scores as numbers. They are stored as strings, and
+                            # string order equals numeric order only while every score has the same number of integer digits.
+                            merged_data[id_]['ctxs'] = sorted(merged_data[id_]['ctxs'], key=lambda x: float(x['retrieval score']), reverse=True)
                             merged_data[id_]['ctxs'] = merged_data[id_]['ctxs'][:cfg.evaluation.search.n_docs]
                             # make sure we still have n_docs documents
                             assert len(merged_data[id_]['ctxs']) == cfg.evaluation.search.n_docs
