@@ -127,13 +127,17 @@ class IVFFlatIndexer(object):
         print(f"Sampling {self.sample_size} examples from {len(self.embed_paths)} files...")
         per_shard_sample_size = self.sample_size // len(self.embed_paths)
         all_sampled_embs = []
+        # Local patch (muisti): seed the training sample. It was drawn unseeded, so a rebuilt
+        # index trained k-means on different vectors and nothing recorded which; seed 1 is
+        # the one _train_index already sets for k-means.
+        rng = np.random.RandomState(1)
         for embed_path in self.embed_paths:
             print(f"Loading pickle embedding from {embed_path}...")
             with open(embed_path, "rb") as fin:
                 _, embeddings = pickle.load(fin)
             shard_size = len(embeddings)
             print(f"Finished loading, sampling {per_shard_sample_size} from {shard_size} for training...")
-            random_samples = np.random.choice(np.arange(shard_size), size=[min(per_shard_sample_size, shard_size)], replace=False)
+            random_samples = rng.choice(np.arange(shard_size), size=[min(per_shard_sample_size, shard_size)], replace=False)
             sampled_embs = embeddings[random_samples]
             all_sampled_embs.extend(sampled_embs)
         all_sampled_embs = np.stack(all_sampled_embs).astype(np.float32)

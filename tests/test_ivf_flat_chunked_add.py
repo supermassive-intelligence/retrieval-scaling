@@ -1,4 +1,5 @@
-"""The chunked IVF-Flat build is byte-identical to adding the whole stacked shard at once."""
+"""The chunked IVF-Flat build is byte-identical to adding the whole stacked shard at once,
+and a rebuild trains on the same sample, so it gives the same index."""
 import os
 import pickle
 import tempfile
@@ -34,6 +35,26 @@ def test_chunked_add_matches_whole_shard_add():
         assert np.array_equal(ix.index.search(q, 5)[1], ref.search(q, 5)[1])
 
 
+def test_rebuild_is_identical():
+    rng = np.random.default_rng(1)
+    e = rng.standard_normal((200, 8)).astype(np.float16)
+    built = []
+    for _ in range(2):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "passages_00.pkl")
+            with open(path, "wb") as f:
+                pickle.dump((list(range(len(e))), e), f)
+            # A sample smaller than the shard, so which rows are drawn matters.
+            IVFFlatIndexer(embed_paths=[path], index_path=os.path.join(d, "i.faiss"),
+                           meta_file=os.path.join(d, "i.meta"),
+                           trained_index_path=os.path.join(d, "i.faiss.trained"),
+                           sample_train_size=60, dimension=8, ncentroids=4, probe=2)
+            with open(os.path.join(d, "i.faiss"), "rb") as f:
+                built.append(f.read())
+    assert built[0] == built[1]
+
+
 if __name__ == "__main__":
     test_chunked_add_matches_whole_shard_add()
+    test_rebuild_is_identical()
     print("ok")
