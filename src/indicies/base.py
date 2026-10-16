@@ -9,6 +9,19 @@ from src.indicies.ivf_pq import IVFPQIndexer
 from src.indicies.index_utils import get_index_dir_and_embedding_paths
 
 
+def index_file_name(index_type, args):
+    if "IVF" not in index_type:
+        return f"index_{index_type}.faiss"
+    name = f"index_{index_type}.{args.sample_train_size}.{args.projection_size}.{args.ncentroids}"
+    # Local patch (muisti): name a PQ index by its code size too. Without it every
+    # n_subquantizers/n_bits setting shared one file name, and a run at another setting
+    # silently loaded the index (and trained codebooks) of the first. IVFFlat names are
+    # unchanged, so the indexes already built are still found.
+    if index_type == "IVFPQ":
+        name += f".pq{args.n_subquantizers}x{args.n_bits}"
+    return name + ".faiss"
+
+
 class Indexer(object):
     
     def __init__(self, cfg):
@@ -20,11 +33,9 @@ class Indexer(object):
         index_dir, embedding_paths = get_index_dir_and_embedding_paths(cfg)
         os.makedirs(index_dir, exist_ok=True)
         logging.info(f"Indexing for passages: {embedding_paths}")
+        formatted_index_name = index_file_name(self.index_type, self.args)
         if "IVF" in self.index_type:
-            formatted_index_name = f"index_{self.index_type}.{self.args.sample_train_size}.{self.args.projection_size}.{self.args.ncentroids}.faiss"
             trained_index_path = os.path.join(index_dir, formatted_index_name+'.trained')
-        else:
-            formatted_index_name = f"index_{self.index_type}.faiss"
         index_path = os.path.join(index_dir, formatted_index_name)
         meta_file = os.path.join(index_dir, formatted_index_name+'.meta')
         pos_map_save_path = os.path.join(index_dir, 'passage_pos_id_map.pkl')
@@ -67,6 +78,8 @@ class Indexer(object):
                 probe=self.args.probe,
                 n_subquantizers=self.args.n_subquantizers,
                 code_size=self.args.n_bits,
+                rerank_k=self.args.get("rerank_k", 0),
+                rescore_vectors_path=os.path.join(index_dir, "rescore_vectors.fp16.npy"),
             )
         else:
             raise NotImplementedError
