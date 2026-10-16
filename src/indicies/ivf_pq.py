@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from omegaconf import ListConfig
 import subprocess
 import re
+import uuid
 
 import faiss
 import numpy as np
@@ -73,11 +74,13 @@ class IVFPQIndexer(IVFFlatIndexer):
     def _load_or_build_vectors(self, path):
         # One fp16 row per index id, in the order _add_keys added them (self.embed_paths
         # order), so row i is index id i. Written to a temporary name and renamed, so a
-        # killed build never leaves a short file that a later run would trust.
+        # killed build never leaves a short file that a later run would trust. The name is
+        # unique per writer: runs at other PQ settings share this file and may build it at
+        # the same time; their files are identical and the last rename wins.
         n = len(self.index_id_to_db_id)
         if not os.path.exists(path):
             logging.info(f"Writing re-scoring vectors to {path}...")
-            tmp = path + ".tmp"
+            tmp = f"{path}.{uuid.uuid4().hex}.tmp"
             out = np.lib.format.open_memmap(tmp, mode="w+", dtype=np.float16, shape=(n, self.dimension))
             offset = 0
             for embed_path in self.embed_paths:

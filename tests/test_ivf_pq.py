@@ -1,5 +1,6 @@
 """IVFPQ inherits IVF-Flat's build fixes, is named by its code size, and its exact re-scoring
 returns the exact top k once every vector is a candidate."""
+import glob
 import os
 import pickle
 import tempfile
@@ -81,7 +82,7 @@ def test_rescore_vectors_are_built_once():
         first = os.stat(vec).st_mtime_ns
         _build(d, paths, rerank_k=10, rescore_vectors_path=vec)  # loads the saved index
         assert os.stat(vec).st_mtime_ns == first
-        assert not os.path.exists(vec + ".tmp")
+        assert not glob.glob(vec + ".*.tmp")
 
 
 def test_too_few_candidates_is_refused():
