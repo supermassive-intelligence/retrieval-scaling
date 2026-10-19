@@ -32,6 +32,7 @@ from contriever.src.evaluation import calculate_matches
 import contriever.src.normalize_text
 
 from src.data import load_eval_data
+from src.sentence_encoders import load_sentence_transformer, query_prompt, uses_sentence_transformers
 from src.index import Indexer, get_bm25_index_dir
 from src.decontamination import check_below_lexical_overlap_threshold
 try:
@@ -46,7 +47,7 @@ device = 'cuda' if torch.cuda.is_available()  else 'cpu'
 
 
 def embed_queries(args, queries, model, tokenizer, model_name_or_path):
-    if "sentence-transformers" in model_name_or_path or "e5" in model_name_or_path or "Qwen3" in model_name_or_path:
+    if uses_sentence_transformers(model_name_or_path):
         all_question = []
         for k, q in enumerate(queries):
             if args.lowercase:
@@ -58,7 +59,7 @@ def embed_queries(args, queries, model, tokenizer, model_name_or_path):
         if "Qwen3" in model_name_or_path:
             embeddings = model.encode(all_question, prompt_name="query", batch_size=min(128, args.per_gpu_batch_size))
         else:
-            embeddings = model.encode(all_question, batch_size=min(128, args.per_gpu_batch_size))  # sentence-transformer has extra memory overhead and can only support a smaller batch size
+            embeddings = model.encode(all_question, prompt=query_prompt(args, model_name_or_path), batch_size=min(128, args.per_gpu_batch_size))  # sentence-transformer has extra memory overhead and can only support a smaller batch size
     
     else:
         model.eval()
@@ -241,9 +242,9 @@ def search_dense_topk(cfg):
         elif "dragon" in model_name_or_path or "drama" in model_name_or_path:
             query_tokenizer = AutoTokenizer.from_pretrained(tokenizer_name_or_path)
             query_encoder = AutoModel.from_pretrained(model_name_or_path, trust_remote_code=True)
-        elif "sentence-transformers" in model_name_or_path or "e5" in model_name_or_path or "Qwen3" in model_name_or_path:
+        elif uses_sentence_transformers(model_name_or_path):
             query_tokenizer = None
-            query_encoder = SentenceTransformer(model_name_or_path)
+            query_encoder = load_sentence_transformer(model_name_or_path, eval_args.search.question_maxlength)
         elif "ReasonIR" in model_name_or_path or "GRIT" in model_name_or_path:
             from gritlm import GritLM
             query_tokenizer = None

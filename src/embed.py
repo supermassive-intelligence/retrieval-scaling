@@ -19,10 +19,11 @@ import contriever.src.utils
 import contriever.src.normalize_text
 
 from src.data import fast_load_jsonl_shard
+from src.sentence_encoders import load_sentence_transformer, uses_sentence_transformers
 
 
 def embed_passages(args, passages, model, tokenizer):
-    if "sentence-transformers" in args.model_name_or_path or "e5" in args.model_name_or_path or "Qwen3" in args.model_name_or_path:
+    if uses_sentence_transformers(args.model_name_or_path):
         allids, alltext = [], []
         for k, p in tqdm(enumerate(passages)):
             allids.append(p["id"])
@@ -38,6 +39,9 @@ def embed_passages(args, passages, model, tokenizer):
         
         with torch.no_grad():
             allembeddings = model.encode(alltext, batch_size=64)  # default is 512, but got oom
+        if not args.no_fp16:
+            # stored fp16 like the contriever path, whatever dtype encode() hands back
+            allembeddings = allembeddings.astype(np.float16)
         
     else:
         total = 0
@@ -125,9 +129,9 @@ def generate_passage_embeddings(cfg):
             from gritlm import GritLM
             tokenizer = None
             model = GritLM(args.model_name_or_path, torch_dtype="auto", mode="embedding")
-        elif "sentence-transformers" in args.model_name_or_path or "e5" in args.model_name_or_path or "Qwen3" in args.model_name_or_path:
+        elif uses_sentence_transformers(args.model_name_or_path):
             tokenizer = None
-            model = SentenceTransformer(args.model_name_or_path)
+            model = load_sentence_transformer(args.model_name_or_path, args.passage_maxlength)
         else:
             print(f"{args.model_name_or_path} is not supported!")
             raise AttributeError
@@ -152,8 +156,11 @@ def generate_passage_embeddings(cfg):
 
             os.makedirs(args.embedding_dir, exist_ok=True)
             print(f"Saving {len(allids)} passage embeddings to {embedding_shard_save_path}.")
-            with open(embedding_shard_save_path, mode="wb") as file:
+            # A file at the final path is taken as finished and skipped; a killed job must not leave one
+            tmp_path = f"{embedding_shard_save_path}.tmp{os.getpid()}"
+            with open(tmp_path, mode="wb") as file:
                 pickle.dump((allids, allembeddings), file)
+            os.replace(tmp_path, embedding_shard_save_path)
 
             print(f"Processed {len(allids)} passages in the {shard_id}-th (out of {args.num_shards}) shard.\nWritten to {embedding_shard_save_path}.")
 
